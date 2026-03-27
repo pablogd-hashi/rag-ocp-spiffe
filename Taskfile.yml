@@ -1,0 +1,73 @@
+version: "3"
+
+vars:
+  COMPOSE: docker compose
+
+tasks:
+  setup:
+    desc: Start Ollama and pull required models
+    cmds:
+      - "{{.COMPOSE}} up -d ollama"
+      - echo "Waiting for Ollama to be ready..."
+      - |
+        for i in $(seq 1 30); do
+          if docker compose exec ollama ollama list >/dev/null 2>&1; then break; fi
+          sleep 2
+        done
+      - docker compose exec ollama ollama pull nomic-embed-text
+      - docker compose exec ollama ollama pull mistral
+      - echo "✓ Models ready"
+
+  ingest:
+    desc: Run the ingest pipeline against ./docs
+    cmds:
+      - "{{.COMPOSE}} run --rm ingest"
+
+  up:
+    desc: Start qdrant, ollama, query-service, and UI
+    cmds:
+      - "{{.COMPOSE}} up -d qdrant ollama query-service ui"
+      - echo ""
+      - echo "Services:"
+      - echo "  Qdrant     → http://localhost:6333"
+      - echo "  Query API  → http://localhost:8000"
+      - echo "  Streamlit  → http://localhost:8501"
+
+  down:
+    desc: Stop all services
+    cmds:
+      - "{{.COMPOSE}} down"
+
+  demo:
+    desc: Full first-time experience (setup → ingest → up → walkthrough)
+    cmds:
+      - task: setup
+      - task: ingest
+      - task: up
+      - task: walkthrough
+
+  ask:
+    desc: Ask a question from the CLI (usage — task ask -- "your question")
+    cmds:
+      - ./scripts/ask.sh "{{.CLI_ARGS}}"
+
+  walkthrough:
+    desc: Interactive demo — runs 3 canned queries with formatted output
+    cmds:
+      - ./scripts/walkthrough.sh
+
+  open:
+    desc: Open the Streamlit UI in the default browser
+    cmds:
+      - open http://localhost:8501 || xdg-open http://localhost:8501 2>/dev/null
+
+  clean:
+    desc: Stop services and remove volumes
+    cmds:
+      - "{{.COMPOSE}} down -v"
+      - echo "✓ Volumes removed"
+
+  help:
+    desc: Show available tasks
+    cmds:
+      - task --list

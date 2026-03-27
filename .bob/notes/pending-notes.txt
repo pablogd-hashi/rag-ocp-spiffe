@@ -1,0 +1,1 @@
+{"id":"afd0a981-2376-46e5-a21e-84531dfbb4f0","ts":"2026-03-27T13:49:07.866Z","path":"/Users/pablod/Documents/Infrastructure/ai/rag-hashicorp-platform/.plans/pre-push-review.md","version":"1.0.0","taskID":"4b67c411-9662-4d70-be36-9b8d0968690d"}

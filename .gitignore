@@ -1,0 +1,14 @@
+.env
+qdrant_data/
+ollama_data/
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
