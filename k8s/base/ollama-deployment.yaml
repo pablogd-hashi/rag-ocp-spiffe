@@ -51,11 +51,12 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
+        hostUsers: false
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
       - name: pull-models
-        image: ollama/ollama:latest
+        image: docker.io/ollama/ollama:latest
         command:
         - sh
         - -c
@@ -63,11 +64,22 @@ spec:
           ollama serve &
           sleep 10
           ollama pull nomic-embed-text
-          ollama pull mistral
+          ollama pull phi3
           pkill ollama
+        env:
+        - name: OLLAMA_MODELS
+          value: "/models"
+        - name: OLLAMA_HOST
+          value: "127.0.0.1:11434"
         volumeMounts:
         - name: ollama-data
-          mountPath: /root/.ollama
+          mountPath: /models
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
         resources:
           requests:
             memory: "2Gi"
@@ -77,7 +89,7 @@ spec:
             cpu: "2000m"
       containers:
       - name: ollama
-        image: ollama/ollama:latest
+        image: docker.io/ollama/ollama:latest
         imagePullPolicy: IfNotPresent
         ports:
         - name: http
@@ -86,9 +98,11 @@ spec:
         env:
         - name: OLLAMA_HOST
           value: "0.0.0.0:11434"
+        - name: OLLAMA_MODELS
+          value: "/models"
         volumeMounts:
         - name: ollama-data
-          mountPath: /root/.ollama
+          mountPath: /models
         readinessProbe:
           httpGet:
             path: /

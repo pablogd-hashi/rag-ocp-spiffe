@@ -12,15 +12,24 @@ Consul Connect automatically secures service-to-service communication using mutu
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        OpenShift Cluster (CRC)                           │
 │                                                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │               Vault PKI (namespace: vault)                      │    │
+│  │  - connect_root  (root CA, 10-year TTL)                         │    │
+│  │  - connect_inter (intermediate CA, rotated by Consul)           │    │
+│  │  - Issues SPIFFE SVIDs via Consul Connect CA provider           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                  │                                       │
+│                                  │ CA delegation                         │
+│                                  ▼                                       │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
 │  │                    Consul Server (namespace: consul)                │ │
 │  │  - Service Discovery                                                │ │
-│  │  - Certificate Authority (CA)                                       │ │
+│  │  - Connect CA (backed by Vault PKI — not built-in CA)              │ │
 │  │  - Service Intentions (Authorization Policies)                      │ │
 │  │  - SPIFFE Identity Management                                       │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 │                                  │                                       │
-│                                  │ Issues Certificates                   │
+│                                  │ Issues certificates (SPIFFE SVIDs)    │
 │                                  ▼                                       │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
 │  │              RAG Platform Services (namespace: rag-platform)        │ │
@@ -96,12 +105,23 @@ spiffe://dc1/ns/rag-platform/svc/ingest
 
 ### 3. Certificate Management
 
+Certificates are issued by **Vault's PKI engine**, not by Consul's built-in CA.
+Consul is configured with `connectCA.provider: vault`, which delegates signing to
+Vault's `connect_inter` PKI mount.  Consul rotates the intermediate automatically.
+
 **Certificate Lifecycle:**
-1. **Issuance:** Envoy sidecar requests certificate from Consul CA
-2. **Validation:** Consul validates the pod's ServiceAccount token
-3. **Delivery:** Consul issues short-lived X.509 certificate with SPIFFE ID
+1. **Issuance:** Envoy sidecar requests a SVID from Consul's Connect CA agent
+2. **Signing:** Consul forwards the CSR to Vault PKI (`connect_inter` mount)
+3. **Delivery:** Vault signs and returns the X.509 certificate with SPIFFE SAN
 4. **Rotation:** Certificates automatically rotate before expiration (default: 72 hours)
 5. **Revocation:** Certificates revoked when pod terminates
+
+**Certificate chain:**
+```
+Vault PKI (connect_root)  — 10-year root CA, never directly issues leaf certs
+  └─► Vault PKI (connect_inter)  — intermediate CA, Consul rotates this
+        └─► SPIFFE SVID per service  — presented by Envoy sidecars for mTLS
+```
 
 **Certificate Properties:**
 - **Validity:** 72 hours (configurable)
@@ -179,34 +199,25 @@ Key configuration in `k8s/consul/consul-values.yaml`:
 global:
   name: consul
   datacenter: dc1
-  
-  # Enable Consul Connect
-  connectInject:
-    enabled: true
-    default: false  # Opt-in per service
-    
-  # Enable TLS
-  tls:
-    enabled: true
-    enableAutoEncrypt: true
-    
-  # Enable ACLs
-  acls:
-    manageSystemACLs: true
 
-# Consul Connect inject configuration
+  # Required for OpenShift — handles SCC for all Consul pods automatically
+  openshift:
+    enabled: true
+
+  # Delegate certificate signing to Vault PKI instead of Consul's built-in CA.
+  # Consul calls Vault's connect_inter mount to sign each SPIFFE SVID.
+  connectCA:
+    provider: "vault"
+    vaultConfig:
+      address: "http://vault.vault.svc.cluster.local:8200"
+      token: "root"
+      rootPKIPath: "connect_root"
+      intermediatePKIPath: "connect_inter"
+
+# Consul Connect sidecar injection
 connectInject:
   enabled: true
-  default: false
-  
-  # Sidecar resources
-  resources:
-    requests:
-      memory: "128Mi"
-      cpu: "50m"
-    limits:
-      memory: "256Mi"
-      cpu: "100m"
+  default: false   # Opt-in per service via annotation
 ```
 
 ### Service Annotations

@@ -1,0 +1,76 @@
+# Kubernetes Job: RAG Ingest
+#
+# Runs the embedding pipeline — reads docs from a ConfigMap, converts them
+# to vectors with nomic-embed-text, and writes them to Qdrant.
+#
+# There are no application-level credentials.  Authentication between services
+# is the mTLS handshake — each Envoy sidecar presents its SPIFFE certificate
+# (signed by Vault PKI via Consul Connect CA) and verifies the peer's certificate
+# before forwarding traffic.  The app connects to localhost; Envoy handles the rest.
+#
+# On OpenShift the ingest container runs through Consul Connect so that all
+# traffic to Qdrant and Ollama is mTLS-encrypted and governed by
+# ServiceIntentions.  The Envoy sidecar is injected automatically when the
+# consul.hashicorp.com/connect-inject annotation is present.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest
+  namespace: rag-platform
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: ingest
+      annotations:
+        # Consul Connect — injects Envoy sidecar for mTLS to qdrant + ollama
+        consul.hashicorp.com/connect-inject: "true"
+        consul.hashicorp.com/connect-service: "ingest"
+        consul.hashicorp.com/connect-service-upstreams: "qdrant:6333,ollama:11434"
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        hostUsers: false
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ingest
+          image: image-registry.openshift-image-registry.svc:5000/rag-platform/ingest:latest
+          imagePullPolicy: Always
+          env:
+            # Consul Connect routes these through Envoy upstreams (mTLS enforced).
+            # No API keys — authentication is the SPIFFE mTLS handshake.
+            - name: QDRANT_URL
+              value: "http://localhost:6333"
+            - name: OLLAMA_URL
+              value: "http://localhost:11434"
+            - name: EMBED_MODEL
+              value: "nomic-embed-text"
+            - name: COLLECTION
+              value: "platform-docs"
+            - name: DOCS_PATH
+              value: "/docs"
+          volumeMounts:
+            - name: platform-docs
+              mountPath: /docs
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        # Documents loaded into a ConfigMap by the _populate-docs task
+        - name: platform-docs
+          configMap:
+            name: platform-docs

@@ -20,29 +20,19 @@ spec:
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
+        hostUsers: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: ingest
-        image: ingest:latest
-        imagePullPolicy: IfNotPresent
+        image: image-registry.openshift-image-registry.svc:5000/rag-platform/ingest:latest
+        imagePullPolicy: Always
         env:
+        # Consul Connect routes these through Envoy upstreams (mTLS enforced)
         - name: QDRANT_URL
-          valueFrom:
-            secretKeyRef:
-              name: qdrant-credentials
-              key: url
-        - name: QDRANT_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: qdrant-credentials
-              key: api_key
-              optional: true
+          value: "http://localhost:6333"
         - name: OLLAMA_URL
-          valueFrom:
-            secretKeyRef:
-              name: ollama-credentials
-              key: url
+          value: "http://localhost:11434"
         - name: EMBED_MODEL
           value: "nomic-embed-text"
         - name: COLLECTION

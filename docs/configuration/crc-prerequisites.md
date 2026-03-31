@@ -355,7 +355,7 @@ oc patch configs.imageregistry.operator.openshift.io cluster --type merge --patc
 ### 3. Install Helm Repositories
 
 ```bash
-# Add HashiCorp Helm repo (for Vault and VSO)
+# Add HashiCorp Helm repo (for Consul)
 helm repo add hashicorp https://helm.releases.hashicorp.com
 
 # Update repos
@@ -363,7 +363,7 @@ helm repo update
 
 # Verify
 helm search repo hashicorp/vault
-helm search repo hashicorp/vault-secrets-operator
+helm search repo hashicorp/consul
 ```
 
 ## Troubleshooting
@@ -489,9 +489,9 @@ Before proceeding with RAG platform deployment, verify:
 
 Once CRC is running and verified:
 
-1. [Deploy Vault and VSO](vault-vso-integration.md)
+1. [Deploy Vault + Consul (Vault PKI as Connect CA)](vault-pki-consul-ca.md)
 2. [Deploy RAG Platform](../architecture/openshift-deployment.md)
-3. [Configure Service Mesh](../architecture/spiffe-mtls-openshift.md)
+3. [Consul Connect + SPIFFE architecture](../architecture/consul-connect-spiffe.md)
 
 ## Useful Commands
 

@@ -46,11 +46,12 @@ spec:
       serviceAccountName: vault
       securityContext:
         runAsNonRoot: true
-        runAsUser: 100
-        fsGroup: 1000
+        hostUsers: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: vault
-        image: hashicorp/vault:1.15.4
+        image: docker.io/hashicorp/vault:1.15.4
         imagePullPolicy: IfNotPresent
         command:
         - vault
@@ -58,6 +59,7 @@ spec:
         - -dev
         - -dev-root-token-id=root
         - -dev-listen-address=0.0.0.0:8200
+        - -dev-no-store-token
         env:
         - name: VAULT_DEV_ROOT_TOKEN_ID
           value: "root"

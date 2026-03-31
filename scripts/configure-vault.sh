@@ -1,8 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-# Configure Vault for OpenShift integration
-# This script sets up KV secrets, Kubernetes auth, and policies
+# Configure Vault for the RAG platform on OpenShift.
+#
+# Role: Vault is the PKI backend for Consul's Connect CA.
+# Consul delegates SPIFFE certificate signing to Vault's PKI engine.
+# Services never receive a Vault token — they get SPIFFE SVIDs from
+# Consul, which are signed by Vault's connect_inter mount.
+#
+# Two-tier PKI hierarchy:
+#   connect_root   — 10-year root CA, never issues leaf certs directly
+#   connect_inter  — intermediate CA; Consul rotates this periodically
+#
+# Consul authenticates to Vault via the Kubernetes auth method,
+# using the consul-server / consul-client ServiceAccount tokens.
 
 echo "Configuring Vault..."
 
@@ -20,67 +31,77 @@ for i in {1..30}; do
   sleep 2
 done
 
-# Enable KV v2 secrets engine
-echo "Enabling KV v2 secrets engine..."
-vault secrets enable -path=kv kv-v2 2>/dev/null || echo "KV already enabled"
-
-# Create secrets for RAG platform
-echo "Creating secrets..."
-vault kv put kv/rag/qdrant \
-  api_key="" \
-  url="http://qdrant.rag-platform.svc.cluster.local:6333"
-
-vault kv put kv/rag/ollama \
-  url="http://ollama.rag-platform.svc.cluster.local:11434"
-
-echo "✓ Secrets created"
-
-# Enable Kubernetes auth method
+# ── Kubernetes auth ──────────────────────────────────────────────────────────
 echo "Enabling Kubernetes auth..."
-vault auth enable kubernetes 2>/dev/null || echo "Kubernetes auth already enabled"
+vault auth enable kubernetes 2>/dev/null || echo "  (already enabled)"
 
-# Configure Kubernetes auth
-echo "Configuring Kubernetes auth..."
 vault write auth/kubernetes/config \
   kubernetes_host="https://kubernetes.default.svc:443"
 
 echo "✓ Kubernetes auth configured"
 
-# Create policy for RAG services
-echo "Creating Vault policy..."
-vault policy write rag-reader - <<EOF
-# Allow reading all RAG secrets
-path "kv/data/rag/*" {
-  capabilities = ["read"]
-}
+# ── PKI: root CA ─────────────────────────────────────────────────────────────
+echo "Setting up Vault PKI (connect_root)..."
+vault secrets enable -path=connect_root pki 2>/dev/null || echo "  (already enabled)"
+vault secrets tune -max-lease-ttl=87600h connect_root
 
-# Allow listing RAG secrets
-path "kv/metadata/rag/*" {
-  capabilities = ["list"]
+vault write connect_root/root/generate/internal \
+  common_name="Consul Connect Root CA" \
+  ttl=87600h \
+  issuer_name=consul-root \
+  >/dev/null 2>&1 || echo "  (root CA already exists)"
+
+vault write connect_root/config/urls \
+  issuing_certificates="${VAULT_ADDR}/v1/connect_root/ca" \
+  crl_distribution_points="${VAULT_ADDR}/v1/connect_root/crl"
+
+echo "✓ connect_root ready"
+
+# ── PKI: intermediate CA ──────────────────────────────────────────────────────
+echo "Setting up Vault PKI (connect_inter)..."
+vault secrets enable -path=connect_inter pki 2>/dev/null || echo "  (already enabled)"
+vault secrets tune -max-lease-ttl=8760h connect_inter
+
+vault write connect_inter/config/urls \
+  issuing_certificates="${VAULT_ADDR}/v1/connect_inter/ca" \
+  crl_distribution_points="${VAULT_ADDR}/v1/connect_inter/crl"
+
+echo "✓ connect_inter ready"
+
+# ── Policy: Consul needs full control of both PKI mounts ─────────────────────
+vault policy write consul-connect-ca - <<'EOF'
+path "connect_root/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+path "connect_inter/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
 }
 EOF
 
-echo "✓ Policy created"
+echo "✓ consul-connect-ca policy created"
 
-# Create Kubernetes auth role
-echo "Creating Kubernetes auth role..."
-vault write auth/kubernetes/role/rag-role \
-  bound_service_account_names=default,rag-query,rag-ingest \
-  bound_service_account_namespaces=rag-platform \
-  policies=rag-reader \
+# ── Kubernetes auth roles for Consul ─────────────────────────────────────────
+vault write auth/kubernetes/role/consul-server \
+  bound_service_account_names=consul-server \
+  bound_service_account_namespaces=consul \
+  policies=consul-connect-ca \
   ttl=1h
 
-echo "✓ Role created"
+vault write auth/kubernetes/role/consul-client \
+  bound_service_account_names=consul-client \
+  bound_service_account_namespaces=consul \
+  policies=consul-connect-ca \
+  ttl=1h
 
-# Verify configuration
-echo ""
-echo "Verifying configuration..."
-echo "Secrets:"
-vault kv list kv/rag/
-
-echo ""
-echo "Policy:"
-vault policy read rag-reader
-
+echo "✓ Kubernetes auth roles for consul-server and consul-client created"
 echo ""
 echo "✓ Vault configuration complete"
+echo "  PKI mounts:  connect_root  connect_inter"
+echo "  Policy:      consul-connect-ca"
+echo "  K8s roles:   consul-server  consul-client (namespace: consul)"

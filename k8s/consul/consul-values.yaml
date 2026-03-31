@@ -1,38 +1,46 @@
 # Consul Helm values for OpenShift deployment
-# Enables Consul Connect service mesh with SPIFFE identities
+# Consul Connect service mesh with SPIFFE identities issued by Vault PKI.
+# Vault is the CA — see scripts/configure-vault.sh for the PKI setup.
 
 global:
   name: consul
   datacenter: dc1
-  
-  # Enable Consul Connect service mesh
-  connectInject:
+
+  # Required for OpenShift — lets OCP assign UIDs/groups via SCCs
+  # instead of the chart enforcing runAsUser/fsGroup values.
+  openshift:
     enabled: true
-    default: true  # Automatically inject Connect sidecar
-    
-  # TLS configuration
+
+  # Gossip/RPC TLS between Consul agents
   tls:
     enabled: true
     enableAutoEncrypt: true
-    
-  # ACLs for security
+
+  # ACLs protect the Consul API
   acls:
     manageSystemACLs: true
-    
-  # Metrics for observability
+
+  # Connect CA backed by Vault PKI.
+  # This is what the blog means by "SPIFFE-issued certificates
+  # from Vault's PKI engine" — Consul's Envoy sidecars present
+  # SVIDs that Vault PKI signed, not Consul's built-in CA.
+  connectCA:
+    provider: "vault"
+    vaultConfig:
+      address: "http://vault.vault.svc.cluster.local:8200"
+      token: "root"
+      rootPKIPath: "connect_root"
+      intermediatePKIPath: "connect_inter"
+
   metrics:
     enabled: true
     enableAgentMetrics: true
 
-# Consul server configuration
+# Consul server — single replica for CRC
 server:
-  replicas: 1  # Single replica for CRC
-  
-  # Storage for Consul data
+  replicas: 1
   storage: 10Gi
-  storageClass: null  # Use default storage class
-  
-  # Resources
+  storageClass: null
   resources:
     requests:
       memory: "512Mi"
@@ -40,18 +48,10 @@ server:
     limits:
       memory: "1Gi"
       cpu: "500m"
-  
-  # Security context for OpenShift
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 100
-    fsGroup: 1000
 
-# Consul client configuration
+# Consul client daemonset
 client:
   enabled: true
-  
-  # Resources
   resources:
     requests:
       memory: "256Mi"
@@ -59,21 +59,11 @@ client:
     limits:
       memory: "512Mi"
       cpu: "250m"
-  
-  # Security context for OpenShift
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 100
-    fsGroup: 1000
 
-# Consul Connect inject configuration
+# Connect sidecar injection — opt-in per pod via annotation
 connectInject:
   enabled: true
-  
-  # Automatically inject sidecar for all pods in rag-platform namespace
-  default: false  # Opt-in per service
-  
-  # Resources for sidecar proxies
+  default: false
   resources:
     requests:
       memory: "128Mi"
@@ -81,11 +71,14 @@ connectInject:
     limits:
       memory: "256Mi"
       cpu: "100m"
-  
-  # Enable metrics from Envoy proxies
   metrics:
     defaultEnabled: true
     defaultEnableMerging: true
+  # Disable API Gateway management — we don't use it and OCP
+  # pre-installs Gateway API CRDs that Helm can't adopt.
+  apiGateway:
+    managedGatewayClass:
+      enabled: false
 
 # Consul UI
 ui:
@@ -93,20 +86,15 @@ ui:
   service:
     type: ClusterIP
 
-# Sync Kubernetes services to Consul catalog
+# Sync Kubernetes services into Consul catalog
 syncCatalog:
   enabled: true
   default: true
   toConsul: true
   toK8S: false
-  k8sPrefix: null
-  consulPrefix: null
-  
-  # Sync only services in rag-platform namespace
   k8sAllowNamespaces: ["rag-platform"]
-  k8sDenyNamespaces: []
 
-# DNS configuration
+# DNS redirection so services can resolve .consul names
 dns:
   enabled: true
   enableRedirection: true

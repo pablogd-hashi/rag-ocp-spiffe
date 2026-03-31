@@ -12,24 +12,12 @@ services:
       timeout: 3s
       retries: 10
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep -q nomic-embed-text"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-
   ingest:
     build: ./ingest
     profiles: ["ingest"]
     environment:
       QDRANT_URL: "http://qdrant:6333"
-      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_URL: "http://host.docker.internal:11434"
       EMBED_MODEL: "nomic-embed-text"
       COLLECTION: "platform-docs"
       DOCS_PATH: "/docs"
@@ -38,8 +26,6 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      ollama:
-        condition: service_healthy
 
   query-service:
     build: ./query-service
@@ -47,15 +33,13 @@ services:
       - "8000:8000"
     environment:
       QDRANT_URL: "http://qdrant:6333"
-      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_URL: "http://host.docker.internal:11434"
       EMBED_MODEL: "nomic-embed-text"
-      LLM_MODEL: "mistral"
+      LLM_MODEL: "phi3"
       COLLECTION: "platform-docs"
-      TOP_K: "5"
+      TOP_K: "3"
     depends_on:
       qdrant:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -75,4 +59,3 @@ services:
 
 volumes:
   qdrant_data:
-  ollama_data:

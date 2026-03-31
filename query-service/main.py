@@ -16,7 +16,7 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
-LLM_MODEL = os.environ.get("LLM_MODEL", "mistral")
+LLM_MODEL = os.environ.get("LLM_MODEL", "phi3")
 COLLECTION = os.environ.get("COLLECTION", "platform-docs")
 TOP_K = int(os.environ.get("TOP_K", "5"))
 

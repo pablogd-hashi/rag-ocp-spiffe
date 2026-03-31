@@ -40,12 +40,13 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
+        hostUsers: false
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: ui
-        image: ui:latest
-        imagePullPolicy: IfNotPresent
+        image: image-registry.openshift-image-registry.svc:5000/rag-platform/ui:latest
+        imagePullPolicy: Always
         ports:
         - name: http
           containerPort: 8501
