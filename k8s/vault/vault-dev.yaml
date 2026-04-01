@@ -46,7 +46,6 @@ spec:
       serviceAccountName: vault
       securityContext:
         runAsNonRoot: true
-        hostUsers: false
         seccompProfile:
           type: RuntimeDefault
       containers:

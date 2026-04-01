@@ -157,14 +157,20 @@ tasks:
         esac
 
   clean:ocp:
-    desc: Remove all OpenShift resources
+    desc: Remove all OpenShift resources (forced)
     cmds:
-      - oc delete project {{.RAG_NAMESPACE}} --wait=false 2>/dev/null || true
-      - helm uninstall consul -n consul 2>/dev/null || true
-      - oc delete project consul --wait=false 2>/dev/null || true
-      - oc delete project {{.VAULT_NAMESPACE}} --wait=false 2>/dev/null || true
       - pkill -f "port-forward.*vault" || true
       - pkill -f "port-forward.*consul" || true
+      - oc delete project {{.RAG_NAMESPACE}} --wait=false 2>/dev/null || true
+      - helm uninstall consul -n consul --no-wait 2>/dev/null || true
+      - oc delete secret -n consul -l "name=consul,owner=helm" --wait=false 2>/dev/null || true
+      - oc delete all --all -n consul --wait=false 2>/dev/null || true
+      - |
+        oc get namespace consul -o json 2>/dev/null \
+          | python3 -c "import sys,json; d=json.load(sys.stdin); d['spec']['finalizers']=[]; print(json.dumps(d))" \
+          | oc replace --raw /api/v1/namespaces/consul/finalize -f - 2>/dev/null || true
+      - oc delete project consul --wait=false 2>/dev/null || true
+      - oc delete project {{.VAULT_NAMESPACE}} --wait=false 2>/dev/null || true
       - echo "✓ Done"
 
   stop:ocp:
@@ -198,7 +204,7 @@ tasks:
       - crc config set cpus 6
       - crc config set enable-cluster-monitoring false
       - echo "Starting CRC (this takes a few minutes)..."
-      - crc start
+      - crc start --bundle ~/.crc/cache/crc_vfkit_4.18.2_arm64.crcbundle
       - |
         eval $(crc oc-env)
         echo "Waiting for API server at https://api.crc.testing:6443..."
@@ -254,28 +260,49 @@ tasks:
       - oc new-project {{.RAG_NAMESPACE}} 2>/dev/null || oc project {{.RAG_NAMESPACE}}
       - oc project {{.VAULT_NAMESPACE}}
       - oc apply -f k8s/vault/vault-dev.yaml
-      - oc wait --for=condition=ready pod -l app=vault -n {{.VAULT_NAMESPACE}} --timeout=120s
+      - oc rollout status deployment/vault -n {{.VAULT_NAMESPACE}} --timeout=120s
       - |
         pkill -f "port-forward.*vault" || true
         sleep 2
         oc port-forward -n {{.VAULT_NAMESPACE}} svc/vault 8200:8200 > /dev/null 2>&1 &
         sleep 3
       - export VAULT_ADDR={{.VAULT_ADDR}} VAULT_TOKEN={{.VAULT_TOKEN}} && ./scripts/configure-vault.sh
+      - 'echo "✓ Vault ready  ->  http://localhost:8200  (token: root)"'
+      - echo "Preparing Consul namespace and permissions..."
+      - oc create namespace consul --dry-run=client -o yaml | oc apply -f -
+      - oc adm policy add-scc-to-group anyuid system:serviceaccounts:consul
       - |
-        echo "✓ Vault ready  ->  http://localhost:8200  (token: root)"
+        if oc get secret consul-gossip-key -n consul &>/dev/null; then
+          echo "  Gossip key already exists — skipping"
+        else
+          GOSSIP_KEY="$(openssl rand -base64 32)"
+          oc create secret generic consul-gossip-key \
+            --from-literal=key="${GOSSIP_KEY}" \
+            -n consul
+          echo "  Gossip key created"
+        fi
       - echo "Deploying Consul..."
       - |
         helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
         helm repo update
       - |
+        STATUS=$(helm status consul -n consul -o json 2>/dev/null \
+          | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['status'])" 2>/dev/null || echo "notfound")
+        if [ "$STATUS" != "deployed" ] && [ "$STATUS" != "notfound" ]; then
+          echo "  Clearing stale Helm release (status: $STATUS)..."
+          helm uninstall consul -n consul --no-wait 2>/dev/null || true
+          oc delete secret -n consul -l "name=consul,owner=helm" --wait=false 2>/dev/null || true
+          sleep 3
+        fi
+      - |
         helm upgrade --install consul hashicorp/consul \
           --namespace consul \
           --create-namespace \
+          --version 1.8.11 \
           --values k8s/consul/consul-values.yaml \
-          --skip-crds \
           --wait \
           --timeout 5m
-      - oc wait --for=condition=ready pod -l component=server -n consul --timeout=300s
+      - oc rollout status statefulset/consul-server -n consul --timeout=300s
       - |
         pkill -f "port-forward.*consul" || true
         sleep 2
