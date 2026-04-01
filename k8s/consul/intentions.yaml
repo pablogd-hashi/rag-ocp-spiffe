@@ -1,9 +1,8 @@
 ---
-# Allow UI to communicate with query-service
 apiVersion: consul.hashicorp.com/v1alpha1
 kind: ServiceIntentions
 metadata:
-  name: ui-to-query-service
+  name: query-service
   namespace: rag-platform
 spec:
   destination:
@@ -11,13 +10,11 @@ spec:
   sources:
   - name: ui
     action: allow
-    description: "Allow UI to query the RAG service"
 ---
-# Allow query-service to communicate with Qdrant
 apiVersion: consul.hashicorp.com/v1alpha1
 kind: ServiceIntentions
 metadata:
-  name: query-service-to-qdrant
+  name: qdrant
   namespace: rag-platform
 spec:
   destination:
@@ -25,13 +22,13 @@ spec:
   sources:
   - name: query-service
     action: allow
-    description: "Allow query service to access Qdrant vector database"
+  - name: ingest
+    action: allow
 ---
-# Allow query-service to communicate with Ollama
 apiVersion: consul.hashicorp.com/v1alpha1
 kind: ServiceIntentions
 metadata:
-  name: query-service-to-ollama
+  name: ollama
   namespace: rag-platform
 spec:
   destination:
@@ -39,46 +36,5 @@ spec:
   sources:
   - name: query-service
     action: allow
-    description: "Allow query service to access Ollama LLM"
----
-# Allow ingest job to communicate with Qdrant
-apiVersion: consul.hashicorp.com/v1alpha1
-kind: ServiceIntentions
-metadata:
-  name: ingest-to-qdrant
-  namespace: rag-platform
-spec:
-  destination:
-    name: qdrant
-  sources:
   - name: ingest
     action: allow
-    description: "Allow ingest job to write to Qdrant"
----
-# Allow ingest job to communicate with Ollama
-apiVersion: consul.hashicorp.com/v1alpha1
-kind: ServiceIntentions
-metadata:
-  name: ingest-to-ollama
-  namespace: rag-platform
-spec:
-  destination:
-    name: ollama
-  sources:
-  - name: ingest
-    action: allow
-    description: "Allow ingest job to generate embeddings via Ollama"
----
-# Deny all other traffic by default
-apiVersion: consul.hashicorp.com/v1alpha1
-kind: ServiceIntentions
-metadata:
-  name: deny-all
-  namespace: rag-platform
-spec:
-  destination:
-    name: "*"
-  sources:
-  - name: "*"
-    action: deny
-    description: "Deny all traffic by default - explicit allow required"

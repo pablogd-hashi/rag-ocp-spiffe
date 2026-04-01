@@ -1,6 +1,6 @@
 # rag-hashicorp-platform
 
-A RAG platform that answers natural-language questions about your platform engineering docs — runbooks, Vault policies, architecture docs. The model only reasons over documents you index. It cannot invent answers outside them.
+A RAG platform that answers natural-language questions about platform engineering docs — runbooks, Vault policies, architecture docs. The model only reasons over documents you index.
 
 ---
 
@@ -20,7 +20,7 @@ docs/ ──► embed ──► Qdrant
 
 ## Docker (local)
 
-Runs Qdrant + query service + UI. Ollama runs natively on your machine (not in Docker) so it can use the GPU.
+Runs Vault, Consul, Qdrant, the query service, and the UI. Ollama runs natively on your machine (not in Docker) so it can use the GPU.
 
 **Prerequisites:** [Ollama](https://ollama.com), Docker Desktop, [Task](https://taskfile.dev)
 
@@ -33,6 +33,8 @@ task demo             # pull models, ingest docs, start services, open UI
 |---|---|
 | UI | http://localhost:8501 |
 | Query API | http://localhost:8000/docs |
+| Vault UI | http://localhost:8200 — token: `root` |
+| Consul UI | http://localhost:8500 |
 
 ```bash
 task ask              # ask a question (prompts for input)
@@ -41,7 +43,7 @@ task ingest           # re-ingest after adding docs
 task clean            # stop and remove volumes
 ```
 
-**Add your own docs:** drop `.md` or `.yaml` files anywhere under `docs/` and run `task ingest`.
+Drop `.md` or `.yaml` files anywhere under `docs/` and run `task ingest` to add your own content.
 
 ---
 
@@ -50,31 +52,34 @@ task clean            # stop and remove volumes
 Deploys the full platform with a zero-trust service mesh:
 
 - **Vault** acts as the Certificate Authority. It runs two PKI mounts (`connect_root`, `connect_inter`) that sign every SPIFFE certificate in the mesh.
-- **Consul Connect** injects an Envoy sidecar into every pod. All service-to-service traffic is mTLS — encrypted and authenticated by SPIFFE certificates.
+- **Consul Connect** injects an Envoy sidecar into every pod. All service-to-service traffic is mTLS — encrypted and authenticated by SPIFFE certificates issued by Vault.
 - **Service Intentions** enforce a deny-by-default policy. Only explicitly allowed service pairs can communicate.
 
 No API keys or passwords exist between services. Authentication is the mTLS handshake.
 
-**Prerequisites:** [CRC](https://developers.redhat.com/products/openshift-local/overview), `oc`, `helm`, `vault` CLI, Docker Desktop, [Task](https://taskfile.dev)
+**Prerequisites:** `oc`, `helm`, `vault` CLI, Docker Desktop, [Task](https://taskfile.dev)
 
-CRC needs 20 GB RAM, 6 CPU cores, 80 GB disk.
+**CRC requirements:**
+
+- OpenShift Local (CRC) 4.18 — the Consul version used (1.21.x / consul-k8s 1.8.x) is certified for OCP 4.16–4.18
+- 20 GB RAM, 6 CPU cores, 80 GB disk
+
+Download the OCP 4.18 bundle from the Red Hat CRC release page and configure CRC to use it:
 
 ```bash
-task demo:ocp         # full run: CRC + Vault + Consul + RAG platform + demo
+crc config set bundle ~/.crc/cache/crc_vfkit_4.18.2_arm64.crcbundle
 ```
-
-Or split into two steps to inspect infrastructure first:
 
 ```bash
 task setup:ocp        # start CRC, build images, deploy Vault + Consul
-task demo:ocp         # deploy RAG platform, ingest docs, open demo
+task demo:ocp         # deploy RAG platform, ingest docs, run demo
 ```
 
 | Service | URL |
 |---|---|
 | UI | `https://ui-rag-platform.apps-crc.testing` |
-| Vault UI | `http://localhost:8200` — token: `root` |
-| Consul UI | `http://localhost:8500` — started automatically |
+| Vault UI | http://localhost:8200 — token: `root` |
+| Consul UI | http://localhost:8500 |
 
 ```bash
 task status:ocp       # check all pods and routes

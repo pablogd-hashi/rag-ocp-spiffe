@@ -59,6 +59,13 @@ tasks:
     desc: Full OpenShift demo — Vault PKI + Consul Connect mTLS + SPIFFE + RAG
     cmds:
       - task: setup:ocp
+      - |
+        pkill -f "port-forward.*vault" || true
+        pkill -f "port-forward.*consul" || true
+        sleep 1
+        oc port-forward -n {{.VAULT_NAMESPACE}} svc/vault 8200:8200 > /dev/null 2>&1 &
+        oc port-forward -n consul svc/consul-ui 8500:80 > /dev/null 2>&1 &
+        sleep 2
       - task: _deploy-rag
       - echo ""
       - |
@@ -292,6 +299,7 @@ tasks:
           echo "  Clearing stale Helm release (status: $STATUS)..."
           helm uninstall consul -n consul --no-wait 2>/dev/null || true
           oc delete secret -n consul -l "name=consul,owner=helm" --wait=false 2>/dev/null || true
+          oc delete job consul-gateway-resources -n consul --ignore-not-found 2>/dev/null || true
           sleep 3
         fi
       - |
@@ -315,6 +323,7 @@ tasks:
     cmds:
       - echo "Deploying Service Intentions..."
       - oc project {{.RAG_NAMESPACE}}
+      - oc delete serviceintentions --all -n {{.RAG_NAMESPACE}} 2>/dev/null || true
       - oc apply -f k8s/consul/intentions.yaml
       - task: _populate-docs
       - echo "Deploying RAG platform..."

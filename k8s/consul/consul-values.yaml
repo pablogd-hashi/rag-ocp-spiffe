@@ -79,7 +79,7 @@ connectInject:
     defaultOverwriteProbes: true
 
   apiGateway:
-    manageExternalCRDs: false
+    manageExternalCRDs: true
     managedGatewayClass:
       enabled: false
 
