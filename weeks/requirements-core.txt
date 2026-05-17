@@ -1,0 +1,5 @@
+# Weeks 0-1 + notebook — no ML inference, no onnxruntime
+qdrant-client>=1.9.0
+ollama>=0.4.0
+python-dotenv>=1.0.0
+pandas>=1.5.0

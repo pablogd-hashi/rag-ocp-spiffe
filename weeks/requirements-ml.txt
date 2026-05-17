@@ -1,0 +1,6 @@
+# Week 2+ experiments — adds local embedding inference via ONNX
+# Warning: pulls onnxruntime (~200MB) and tokenizers on first install
+# sentence-transformers needed for week 4 cross-encoder reranking
+-r requirements-core.txt
+fastembed>=0.2.0
+sentence-transformers>=2.7.0

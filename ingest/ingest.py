@@ -1,38 +1,70 @@
-"""Ingest Markdown, HCL, and Terraform files into Qdrant."""
+"""Ingest Markdown, HCL, and Terraform files into Qdrant.
+
+Uses Qdrant Cloud inference for embedding — no local Ollama required.
+Payloads include tenant, doc_type, and week tags so the learning-lab
+experiments can filter by these fields without touching collection design.
+"""
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import time
 from pathlib import Path
 
-import ollama
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    Document,
+    PayloadSchemaType,
+    PointStruct,
+    VectorParams,
+)
 
 from chunker import chunk_hcl, chunk_markdown
 
-# ── Config from environment ─────────────────────────────────────────────
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+# ── Config ──────────────────────────────────────────────────────────────
+QDRANT_URL     = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://ollama:11434")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
-COLLECTION = os.environ.get("COLLECTION", "platform-docs")
-DOCS_PATH = os.environ.get("DOCS_PATH", "/docs")
+EMBED_MODEL    = os.environ.get("EMBED_MODEL", "sentence-transformers/all-minilm-l6-v2")
+COLLECTION     = os.environ.get("COLLECTION", "platform-docs")
+DOCS_PATH      = os.environ.get("DOCS_PATH", "/docs")
+TENANT         = os.environ.get("TENANT", "default")
+EMBED_DIM      = int(os.environ.get("EMBED_DIM", "384"))
 
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "30"))
 RETRY_DELAY = int(os.environ.get("RETRY_DELAY", "2"))
 
-EMBED_DIM = 768  # nomic-embed-text output dimensionality
+# Map file paths to human-readable doc_type values for payload filtering
+_DOC_TYPE_MAP = {
+    "architecture": "architecture",
+    "runbooks":     "runbook",
+    "policies":     "policy",
+    "configuration":"configuration",
+    "jobs":         "job",
+}
 
 
-# ── Readiness helpers ───────────────────────────────────────────────────
+def _doc_type(rel_path: str) -> str:
+    for segment, dtype in _DOC_TYPE_MAP.items():
+        if segment in rel_path:
+            return dtype
+    return "general"
+
+
+def _stable_id(text: str, source: str) -> int:
+    """Deterministic point ID so re-ingestion is idempotent."""
+    h = hashlib.sha256(f"{source}::{text[:200]}".encode()).hexdigest()
+    return int(h[:16], 16) % (2**63)
+
+
+# ── Readiness helpers ────────────────────────────────────────────────────
 def wait_for_qdrant(client: QdrantClient) -> None:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             client.get_collections()
-            print("✓ Qdrant is ready")
+            print("✓ Qdrant ready")
             return
         except Exception as exc:
             print(f"  waiting for Qdrant ({attempt}/{MAX_RETRIES}): {exc}")
@@ -40,90 +72,92 @@ def wait_for_qdrant(client: QdrantClient) -> None:
     sys.exit("Qdrant did not become ready in time")
 
 
-def wait_for_ollama(ol: ollama.Client) -> None:
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            ol.list()
-            print("✓ Ollama is ready")
-            return
-        except Exception as exc:
-            print(f"  waiting for Ollama ({attempt}/{MAX_RETRIES}): {exc}")
-            time.sleep(RETRY_DELAY)
-    sys.exit("Ollama did not become ready in time")
-
-
-# ── File discovery and chunking ─────────────────────────────────────────
+# ── File discovery ───────────────────────────────────────────────────────
 EXTENSIONS = {".md", ".hcl", ".tf"}
 
 
 def discover_files(root: str) -> list[Path]:
     root_path = Path(root)
-    return sorted(
-        p for p in root_path.rglob("*") if p.suffix in EXTENSIONS and p.is_file()
-    )
+    return sorted(p for p in root_path.rglob("*") if p.suffix in EXTENSIONS and p.is_file())
 
 
 def chunk_file(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
-    if path.suffix == ".md":
-        return chunk_markdown(text)
-    return chunk_hcl(text)
+    return chunk_markdown(text) if path.suffix == ".md" else chunk_hcl(text)
 
 
-# ── Main ────────────────────────────────────────────────────────────────
-def main() -> None:
-    docs_root = Path(DOCS_PATH)
-    if not docs_root.is_dir():
-        sys.exit(f"DOCS_PATH {DOCS_PATH} is not a directory")
-
-    # Clients
-    qdrant_kwargs: dict = {"url": QDRANT_URL, "timeout": 30}
-    if QDRANT_API_KEY:
-        qdrant_kwargs["api_key"] = QDRANT_API_KEY
-    qd = QdrantClient(**qdrant_kwargs)
-    ol = ollama.Client(host=OLLAMA_URL)
-
-    # Wait for services
-    wait_for_qdrant(qd)
-    wait_for_ollama(ol)
-
-    # Ensure collection
+# ── Collection bootstrap ─────────────────────────────────────────────────
+def ensure_collection(qd: QdrantClient) -> None:
     if not qd.collection_exists(COLLECTION):
         qd.create_collection(
             collection_name=COLLECTION,
             vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
         )
-        print(f"✓ Created collection '{COLLECTION}'")
+        print(f"✓ Created collection '{COLLECTION}' (dim={EMBED_DIM}, cosine)")
     else:
         print(f"✓ Collection '{COLLECTION}' already exists")
 
-    # Discover and ingest
+    # Payload indexes let Qdrant filter without scanning all points.
+    for field in ("tenant", "doc_type"):
+        try:
+            qd.create_payload_index(
+                collection_name=COLLECTION,
+                field_name=field,
+                field_schema=PayloadSchemaType.KEYWORD,
+            )
+            print(f"  payload index: {field} (keyword)")
+        except Exception:
+            pass  # index already exists
+
+
+# ── Main ─────────────────────────────────────────────────────────────────
+def main() -> None:
+    docs_root = Path(DOCS_PATH)
+    if not docs_root.is_dir():
+        sys.exit(f"DOCS_PATH {DOCS_PATH} is not a directory")
+
+    qd = QdrantClient(
+        url=QDRANT_URL,
+        api_key=QDRANT_API_KEY or None,
+        cloud_inference=True,
+        timeout=30,
+        check_compatibility=False,
+    )
+
+    wait_for_qdrant(qd)
+    ensure_collection(qd)
+
     files = discover_files(DOCS_PATH)
     if not files:
         sys.exit(f"No .md / .hcl / .tf files found under {DOCS_PATH}")
 
-    point_id = 0
     points: list[PointStruct] = []
-
     for fpath in files:
-        rel = str(fpath.relative_to(docs_root))
+        rel   = str(fpath.relative_to(docs_root))
+        dtype = _doc_type(rel)
         chunks = chunk_file(fpath)
-        print(f"  {rel}: {len(chunks)} chunk(s)")
+        print(f"  {rel}: {len(chunks)} chunk(s)  [doc_type={dtype}]")
 
         for chunk in chunks:
-            resp = ol.embed(model=EMBED_MODEL, input=chunk)
-            vector = resp.embeddings[0]
             points.append(
                 PointStruct(
-                    id=point_id,
-                    vector=vector,
-                    payload={"text": chunk, "source": rel},
+                    id=_stable_id(chunk, rel),
+                    vector=Document(text=chunk, model=EMBED_MODEL),
+                    payload={
+                        "text":     chunk,
+                        "source":   rel,
+                        "tenant":   TENANT,
+                        "doc_type": dtype,
+                    },
                 )
             )
-            point_id += 1
 
-    qd.upsert(collection_name=COLLECTION, points=points)
-    print(f"✓ Ingested {point_id} chunks from {len(files)} files")
+    # Upsert in batches of 100
+    batch_size = 100
+    for i in range(0, len(points), batch_size):
+        qd.upsert(collection_name=COLLECTION, points=points[i : i + batch_size])
+
+    print(f"✓ Ingested {len(points)} chunks from {len(files)} files  (tenant={TENANT})")
 
 
 if __name__ == "__main__":

@@ -17,23 +17,229 @@ tasks:
     cmds:
       - |
         echo ""
-        echo "  RAG Platform"
+        echo "  RAG Platform — Qdrant Learning Lab"
         echo ""
+        echo "  ── Cloud / Learning Lab ─────────────────────────────────────────"
+        echo "  task cloud:status  Check Qdrant Cloud connection + collection info"
+        echo "  task cloud:demo    Start demo against Qdrant Cloud (no local Qdrant)"
+        echo "  task lab           Start the interactive Lab UI (Streamlit)"
+        echo "  task lab:install   Install lab-ui Python dependencies"
+        echo ""
+        echo "  ── Week experiments ─────────────────────────────────────────────"
+        echo "  task w0:explore    Week 0: connect and explore Qdrant Cloud"
+        echo "  task w0:ops        Week 0: collection CRUD and config"
+        echo "  task w0:filters    Week 0: payload filters and multi-tenancy"
+        echo "  task w0:migrate    Week 0: migrate docs to Qdrant Cloud"
+        echo ""
+        echo "  task w1:distance   Week 1: distance metric comparison"
+        echo "  task w1:hnsw       Week 1: HNSW recall vs latency benchmark"
+        echo "  task w1:quant      Week 1: quantization memory vs recall"
+        echo ""
+        echo "  task w2:embed      Week 2: embedding model comparison"
+        echo "  task w2:chunking   Week 2: chunking strategies (fixed/sentence/paragraph, named vectors)"
+        echo "  task w2:hybrid     Week 2: hybrid dense+sparse search"
+        echo ""
+        echo "  task w3:bench      Week 3: concurrent query throughput benchmark"
+        echo "  task w3:eval       Week 3: retrieval quality eval with MRR@K"
+        echo ""
+        echo "  task w4:tenants    Week 4: multi-tenancy patterns (A vs B)"
+        echo "  task w4:reranking  Week 4: cross-encoder reranking"
+        echo ""
+        echo "  ── Original demo ────────────────────────────────────────────────"
         echo "  task demo          Pull models, ingest docs, open UI, interactive Q&A"
         echo "  task demo:ocp      Full OpenShift demo (Vault PKI + Consul mTLS + SPIFFE)"
-        echo ""
         echo "  task ask           Ask a question"
-        echo "  task ingest        Re-ingest docs after adding files to docs/"
+        echo "  task ingest        Re-ingest docs"
         echo "  task open          Open Streamlit UI in browser"
         echo "  task status        Show running services"
-        echo "  task logs          Stream logs  (task logs -- ui)"
         echo "  task clean         Stop everything and remove volumes"
         echo ""
         echo "  task status:ocp    OpenShift service status"
         echo "  task logs:ocp      OpenShift logs  (task logs:ocp -- query-service)"
         echo "  task clean:ocp     Remove all OpenShift resources"
-        echo "  task stop:ocp      Stop CRC"
         echo ""
+
+  # ── Qdrant Cloud / Lab ──────────────────────────────────────────────────
+
+  cloud:status:
+    desc: Check Qdrant Cloud connection and print collection stats
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-0/experiments/01_connect_and_explore.py
+
+  cloud:demo:
+    desc: Start RAG demo against Qdrant Cloud (Vault+Consul+Ollama local, no Qdrant container)
+    cmds:
+      - task: _setup-cloud
+      - echo "Starting infrastructure (Vault + Consul — Qdrant is in the cloud)..."
+      - "{{.COMPOSE}} up -d vault consul"
+      - echo "Ingesting documents to Qdrant Cloud..."
+      - "{{.COMPOSE}} run --rm -e QDRANT_URL -e QDRANT_API_KEY ingest"
+      - echo "Starting services..."
+      - "{{.COMPOSE}} up -d query-service ui"
+      - sleep 3
+      - echo ""
+      - echo "  UI        -> http://localhost:8501"
+      - echo "  Query API -> http://localhost:8000/docs"
+      - echo "  Lab UI    -> localhost:8502  (task lab)"
+      - echo ""
+      - open http://localhost:8501 2>/dev/null || true
+
+  lab:
+    desc: Start the interactive Qdrant Lab UI (Streamlit multi-page app)
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        cd lab-ui && streamlit run app.py --server.port 8502
+
+  lab:ocp:
+    desc: Deploy Lab UI to OpenShift
+    cmds:
+      - oc apply -f k8s/lab-ui/
+
+  lab:install:
+    desc: Install lab-ui dependencies with uv
+    cmds:
+      - uv pip install -r lab-ui/requirements.txt
+
+  setup:
+    desc: Install core deps (weeks 0-1 + notebook) — fast, no onnxruntime
+    cmds:
+      - uv pip install -r weeks/requirements-core.txt
+      - echo "Done. Run 'task w0:migrate' to ingest docs."
+      - echo "For week 2 experiments (fastembed) run task setup:ml"
+
+  setup:ml:
+    desc: Install ML deps for week 2+ experiments (adds fastembed + onnxruntime ~200MB)
+    cmds:
+      - uv pip install -r weeks/requirements-ml.txt
+      - uv pip install -r lab-ui/requirements.txt
+      - echo "Done. All experiments unlocked."
+
+  setup:venv:
+    desc: Create isolated venv with uv and install core deps
+    cmds:
+      - uv venv .venv
+      - uv pip install --python .venv/bin/python -r weeks/requirements-core.txt
+      - echo "Activate the venv with -- source .venv/bin/activate"
+
+  # ── Week 0 experiments ──────────────────────────────────────────────────
+
+  w0:explore:
+    desc: "Week 0 Lab 1 — connect to Qdrant Cloud and explore"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-0/experiments/01_connect_and_explore.py
+
+  w0:ops:
+    desc: "Week 0 Lab 2 — collection CRUD, HNSW config, payload indexes"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-0/experiments/02_collection_ops.py
+
+  w0:filters:
+    desc: "Week 0 Lab 3 — payload filtering and multi-tenancy simulation"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-0/experiments/03_payload_filters.py
+
+  w0:migrate:
+    desc: "Week 0 — migrate docs/ to Qdrant Cloud (server-side inference, no Ollama needed)"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-0/setup/migrate_to_cloud.py
+
+  w0:recover:
+    desc: "Week 0 — force-delete a broken collection and verify cluster health"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-0/setup/recover_collection.py
+
+  # ── Week 1 experiments ──────────────────────────────────────────────────
+
+  w1:distance:
+    desc: "Week 1 Lab 1 — cosine vs euclidean vs dot product comparison"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-1/experiments/01_distance_metrics.py
+
+  w1:hnsw:
+    desc: "Week 1 Lab 2 — HNSW m/ef_construct recall vs latency benchmark"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-1/experiments/02_hnsw_tuning.py
+
+  w1:quant:
+    desc: "Week 1 Lab 3 — scalar vs binary quantization memory and recall"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-1/experiments/03_quantization.py
+
+  # ── Week 2 experiments ──────────────────────────────────────────────────
+
+  w2:embed:
+    desc: "Week 2 Lab 1 — embedding model comparison (nomic vs bge)"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-2/experiments/01_embedding_comparison.py
+
+  w2:chunking:
+    desc: "Week 2 Lab 2 — chunking strategy comparison (fixed/sentence/paragraph, named vectors)"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-2/experiments/02_chunking_strategies.py
+
+  w2:hybrid:
+    desc: "Week 2 Lab 3 — hybrid dense+sparse search (BM25 + embeddings)"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-2/experiments/03_hybrid_search.py
+
+  # ── Week 3 experiments ──────────────────────────────────────────────────
+
+  w3:bench:
+    desc: "Week 3 Lab 1 — throughput and latency benchmark (concurrent queries)"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-3/experiments/01_benchmark.py
+
+  w3:eval:
+    desc: "Week 3 Lab 2 — ground truth retrieval evaluation with MRR@K"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-3/experiments/02_retrieval_eval.py
+
+  # ── Week 4 experiments ──────────────────────────────────────────────────
+
+  w4:tenants:
+    desc: "Week 4 Lab 1 — multi-tenancy: payload filter vs per-collection"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-4/experiments/01_multitenancy.py
+
+  w4:reranking:
+    desc: "Week 4 Lab 2 — cross-encoder reranking (requires task setup:ml)"
+    cmds:
+      - |
+        set -a; [ -f .env ] && source .env; set +a
+        python3 weeks/week-4/experiments/02_reranking.py
+
+  # ── Original demo ────────────────────────────────────────────────────────
 
   demo:
     desc: Pull models, ingest docs, open UI, interactive Q&A
@@ -187,6 +393,20 @@ tasks:
       - echo "✓ CRC stopped"
 
   # ── Internal ────────────────────────────────────────────────────────────
+
+  _setup-cloud:
+    internal: true
+    desc: "Cloud demo setup — only phi3 needed (embedding handled by Qdrant Cloud)"
+    cmds:
+      - echo "Checking Ollama..."
+      - |
+        if ! ollama list >/dev/null 2>&1; then
+          echo "Error: Ollama is not running. Start it with: ollama serve"
+          exit 1
+        fi
+      - echo "Pulling phi3 (LLM for answer generation)..."
+      - ollama pull phi3
+      - echo "✓ phi3 ready  (embedding skipped — Qdrant Cloud handles it)"
 
   _setup-docker:
     internal: true
